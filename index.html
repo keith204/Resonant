@@ -1,0 +1,776 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Resonant Frequency Analyzer</title>
+  <meta name="description" content="Detect resonant frequencies from your microphone in real-time">
+  <meta name="theme-color" content="#0a0a0f">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Resonant">
+  <link rel="manifest" href="manifest.json">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/icon.svg">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      background: #0a0a0f;
+      color: #e0e0e0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    h1 {
+      margin: 24px 0 4px;
+      font-size: 1.6rem;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+      color: #f0f0f0;
+    }
+
+    .subtitle {
+      font-size: 0.85rem;
+      color: #666;
+      margin-bottom: 20px;
+    }
+
+    .controls {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      margin-bottom: 16px;
+    }
+
+    button {
+      padding: 10px 28px;
+      border: none;
+      border-radius: 8px;
+      font-size: 0.95rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+
+    #startBtn {
+      background: #22c55e;
+      color: #000;
+    }
+    #startBtn:hover { background: #16a34a; }
+    #startBtn.recording { background: #ef4444; }
+    #startBtn.recording:hover { background: #dc2626; }
+    #startBtn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    .status {
+      font-size: 0.8rem;
+      color: #888;
+    }
+    .status.active { color: #22c55e; }
+
+    .canvas-container {
+      width: 95%;
+      max-width: 1200px;
+      background: #111118;
+      border-radius: 12px;
+      padding: 16px;
+      margin-bottom: 16px;
+      border: 1px solid #1a1a24;
+    }
+
+    .canvas-container h2 {
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #555;
+      margin-bottom: 8px;
+    }
+
+    canvas {
+      width: 100%;
+      height: 220px;
+      display: block;
+      border-radius: 6px;
+    }
+
+    #spectrogramCanvas {
+      height: 160px;
+    }
+
+    .resonances {
+      width: 95%;
+      max-width: 1200px;
+      background: #111118;
+      border-radius: 12px;
+      padding: 16px;
+      margin-bottom: 24px;
+      border: 1px solid #1a1a24;
+    }
+
+    .resonances h2 {
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #555;
+      margin-bottom: 12px;
+    }
+
+    .resonance-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    .resonance-card {
+      background: #1a1a26;
+      border: 1px solid #2a2a3a;
+      border-radius: 8px;
+      padding: 12px 16px;
+      min-width: 160px;
+      flex: 0 1 auto;
+    }
+
+    .resonance-card .freq {
+      font-size: 1.3rem;
+      font-weight: 700;
+      color: #60a5fa;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .resonance-card .note {
+      font-size: 0.85rem;
+      color: #a78bfa;
+      margin-top: 2px;
+    }
+
+    .resonance-card .magnitude {
+      font-size: 0.75rem;
+      color: #555;
+      margin-top: 4px;
+    }
+
+    .resonance-card .bar-container {
+      height: 4px;
+      background: #222;
+      border-radius: 2px;
+      margin-top: 6px;
+      overflow: hidden;
+    }
+
+    .resonance-card .bar {
+      height: 100%;
+      background: linear-gradient(90deg, #3b82f6, #a78bfa);
+      border-radius: 2px;
+      transition: width 0.15s ease;
+    }
+
+    .no-resonances {
+      color: #444;
+      font-size: 0.85rem;
+      font-style: italic;
+    }
+
+    .settings {
+      display: flex;
+      gap: 20px;
+      align-items: center;
+      margin-bottom: 16px;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+
+    .setting {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 0.8rem;
+      color: #888;
+    }
+
+    .setting select, .setting input {
+      background: #1a1a26;
+      border: 1px solid #2a2a3a;
+      color: #e0e0e0;
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-size: 0.8rem;
+    }
+
+    .setting input[type="range"] {
+      width: 80px;
+      accent-color: #3b82f6;
+    }
+
+    .install-banner {
+      display: none;
+      width: 95%;
+      max-width: 1200px;
+      background: linear-gradient(135deg, #1a1a2e, #16213e);
+      border: 1px solid #2a2a4a;
+      border-radius: 10px;
+      padding: 12px 16px;
+      margin-bottom: 16px;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .install-banner.visible { display: flex; }
+
+    .install-banner p {
+      font-size: 0.85rem;
+      color: #a0a0c0;
+    }
+
+    .install-banner button {
+      padding: 8px 20px;
+      background: #3b82f6;
+      color: #fff;
+      font-size: 0.85rem;
+      white-space: nowrap;
+    }
+    .install-banner button:hover { background: #2563eb; }
+
+    .install-banner .dismiss {
+      background: transparent;
+      color: #666;
+      padding: 8px;
+      font-size: 1.1rem;
+      line-height: 1;
+    }
+
+    @media (max-width: 600px) {
+      h1 { font-size: 1.2rem; margin-top: 16px; }
+      .settings { gap: 10px; padding: 0 12px; }
+      .setting { font-size: 0.7rem; }
+      canvas { height: 160px; }
+      #spectrogramCanvas { height: 120px; }
+      .resonance-card { min-width: 130px; padding: 10px 12px; }
+      .resonance-card .freq { font-size: 1.1rem; }
+    }
+  </style>
+</head>
+<body>
+  <h1>Resonant Frequency Analyzer</h1>
+  <p class="subtitle">Detect resonant frequencies from your microphone in real-time</p>
+
+  <div class="install-banner" id="installBanner">
+    <p>Install Resonant as an app for quick access</p>
+    <button id="installBtn">Install</button>
+    <button class="dismiss" id="dismissInstall">&times;</button>
+  </div>
+
+  <div class="settings">
+    <div class="setting">
+      <label for="fftSize">FFT Size:</label>
+      <select id="fftSize">
+        <option value="4096">4096</option>
+        <option value="8192" selected>8192</option>
+        <option value="16384">16384</option>
+      </select>
+    </div>
+    <div class="setting">
+      <label for="smoothing">Smoothing:</label>
+      <input type="range" id="smoothing" min="0" max="0.95" step="0.05" value="0.8">
+    </div>
+    <div class="setting">
+      <label for="threshold">Peak Threshold:</label>
+      <input type="range" id="threshold" min="1.5" max="8" step="0.5" value="3">
+      <span id="thresholdVal">3.0x</span>
+    </div>
+    <div class="setting">
+      <label for="minFreq">Min Hz:</label>
+      <input type="number" id="minFreq" value="20" min="1" max="2000" style="width:60px">
+    </div>
+    <div class="setting">
+      <label for="maxFreq">Max Hz:</label>
+      <input type="number" id="maxFreq" value="8000" min="100" max="22050" style="width:60px">
+    </div>
+  </div>
+
+  <div class="controls">
+    <button id="startBtn">Start Recording</button>
+    <span class="status" id="status">Ready</span>
+  </div>
+
+  <div class="canvas-container">
+    <h2>Frequency Spectrum</h2>
+    <canvas id="spectrumCanvas"></canvas>
+  </div>
+
+  <div class="canvas-container">
+    <h2>Spectrogram</h2>
+    <canvas id="spectrogramCanvas"></canvas>
+  </div>
+
+  <div class="resonances">
+    <h2>Detected Resonant Frequencies</h2>
+    <div class="resonance-list" id="resonanceList">
+      <span class="no-resonances">Start recording to detect resonances...</span>
+    </div>
+  </div>
+
+  <script>
+    const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+
+    function freqToNote(freq) {
+      if (freq <= 0) return '';
+      const semitones = 12 * Math.log2(freq / 440);
+      const midi = Math.round(semitones) + 69;
+      const note = NOTE_NAMES[midi % 12];
+      const octave = Math.floor(midi / 12) - 1;
+      const cents = Math.round((semitones - Math.round(semitones)) * 100);
+      const centsStr = cents >= 0 ? `+${cents}` : `${cents}`;
+      return `${note}${octave} (${centsStr}c)`;
+    }
+
+    class ResonantAnalyzer {
+      constructor() {
+        this.audioCtx = null;
+        this.analyser = null;
+        this.stream = null;
+        this.running = false;
+        this.animFrame = null;
+        this.spectrogramData = [];
+        this.spectrogramMaxCols = 200;
+
+        this.spectrumCanvas = document.getElementById('spectrumCanvas');
+        this.spectrogramCanvas = document.getElementById('spectrogramCanvas');
+        this.spectrumCtx = this.spectrumCanvas.getContext('2d');
+        this.spectrogramCtx = this.spectrogramCanvas.getContext('2d');
+
+        this.resonanceList = document.getElementById('resonanceList');
+        this.startBtn = document.getElementById('startBtn');
+        this.statusEl = document.getElementById('status');
+
+        this.startBtn.addEventListener('click', () => this.toggle());
+
+        this.thresholdInput = document.getElementById('threshold');
+        this.thresholdVal = document.getElementById('thresholdVal');
+        this.thresholdInput.addEventListener('input', () => {
+          this.thresholdVal.textContent = `${parseFloat(this.thresholdInput.value).toFixed(1)}x`;
+        });
+
+        this.resizeCanvases();
+        window.addEventListener('resize', () => this.resizeCanvases());
+        this.drawIdle();
+      }
+
+      resizeCanvases() {
+        for (const canvas of [this.spectrumCanvas, this.spectrogramCanvas]) {
+          const rect = canvas.getBoundingClientRect();
+          canvas.width = rect.width * devicePixelRatio;
+          canvas.height = rect.height * devicePixelRatio;
+        }
+      }
+
+      drawIdle() {
+        for (const [canvas, ctx] of [
+          [this.spectrumCanvas, this.spectrumCtx],
+          [this.spectrogramCanvas, this.spectrogramCtx]
+        ]) {
+          ctx.fillStyle = '#0d0d14';
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.fillStyle = '#333';
+          ctx.font = `${14 * devicePixelRatio}px system-ui`;
+          ctx.textAlign = 'center';
+          ctx.fillText('Waiting for microphone...', canvas.width / 2, canvas.height / 2);
+        }
+      }
+
+      async toggle() {
+        if (this.running) {
+          this.stop();
+        } else {
+          await this.start();
+        }
+      }
+
+      async start() {
+        try {
+          this.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        } catch (e) {
+          this.statusEl.textContent = 'Microphone access denied';
+          return;
+        }
+
+        this.audioCtx = new AudioContext();
+        const source = this.audioCtx.createMediaStreamSource(this.stream);
+
+        const fftSize = parseInt(document.getElementById('fftSize').value);
+
+        this.analyser = this.audioCtx.createAnalyser();
+        this.analyser.fftSize = fftSize;
+        this.analyser.smoothingTimeConstant = parseFloat(document.getElementById('smoothing').value);
+
+        source.connect(this.analyser);
+
+        this.freqData = new Float32Array(this.analyser.frequencyBinCount);
+        this.running = true;
+        this.spectrogramData = [];
+
+        this.startBtn.textContent = 'Stop Recording';
+        this.startBtn.classList.add('recording');
+        this.statusEl.textContent = `Recording (${this.audioCtx.sampleRate} Hz)`;
+        this.statusEl.classList.add('active');
+
+        this.loop();
+      }
+
+      stop() {
+        this.running = false;
+        if (this.animFrame) cancelAnimationFrame(this.animFrame);
+        if (this.stream) this.stream.getTracks().forEach(t => t.stop());
+        if (this.audioCtx) this.audioCtx.close();
+
+        this.startBtn.textContent = 'Start Recording';
+        this.startBtn.classList.remove('recording');
+        this.statusEl.textContent = 'Stopped';
+        this.statusEl.classList.remove('active');
+      }
+
+      loop() {
+        if (!this.running) return;
+        this.analyser.smoothingTimeConstant = parseFloat(document.getElementById('smoothing').value);
+        this.analyser.getFloatFrequencyData(this.freqData);
+
+        const peaks = this.findResonances();
+        this.drawSpectrum(peaks);
+        this.drawSpectrogram();
+        this.updateResonanceDisplay(peaks);
+
+        this.animFrame = requestAnimationFrame(() => this.loop());
+      }
+
+      findResonances() {
+        const sampleRate = this.audioCtx.sampleRate;
+        const binCount = this.analyser.frequencyBinCount;
+        const binWidth = sampleRate / (binCount * 2);
+        const threshold = parseFloat(this.thresholdInput.value);
+        const minFreq = parseInt(document.getElementById('minFreq').value);
+        const maxFreq = parseInt(document.getElementById('maxFreq').value);
+
+        const minBin = Math.max(1, Math.floor(minFreq / binWidth));
+        const maxBin = Math.min(binCount - 1, Math.ceil(maxFreq / binWidth));
+
+        // Convert dB to linear for analysis
+        const linear = new Float32Array(binCount);
+        for (let i = 0; i < binCount; i++) {
+          linear[i] = Math.pow(10, this.freqData[i] / 20);
+        }
+
+        // Compute local average using a sliding window
+        const windowSize = Math.max(10, Math.floor(binCount / 40));
+        const peaks = [];
+
+        for (let i = minBin; i < maxBin; i++) {
+          // Check if this bin is a local maximum
+          let isMax = true;
+          const checkRange = Math.max(3, Math.floor(windowSize / 4));
+          for (let j = Math.max(minBin, i - checkRange); j <= Math.min(maxBin - 1, i + checkRange); j++) {
+            if (j !== i && linear[j] > linear[i]) {
+              isMax = false;
+              break;
+            }
+          }
+          if (!isMax) continue;
+
+          // Compute local average (excluding the peak region)
+          let sum = 0;
+          let count = 0;
+          for (let j = Math.max(minBin, i - windowSize); j <= Math.min(maxBin - 1, i + windowSize); j++) {
+            if (Math.abs(j - i) > checkRange) {
+              sum += linear[j];
+              count++;
+            }
+          }
+          const localAvg = count > 0 ? sum / count : 0;
+
+          // Peak must exceed local average by threshold factor
+          const prominence = localAvg > 0 ? linear[i] / localAvg : 0;
+          if (prominence >= threshold && this.freqData[i] > -80) {
+            // Parabolic interpolation for better frequency estimate
+            const alpha = this.freqData[Math.max(0, i - 1)];
+            const beta = this.freqData[i];
+            const gamma = this.freqData[Math.min(binCount - 1, i + 1)];
+            const denom = alpha - 2 * beta + gamma;
+            const correction = denom !== 0 ? 0.5 * (alpha - gamma) / denom : 0;
+            const exactBin = i + correction;
+            const freq = exactBin * binWidth;
+
+            peaks.push({
+              freq,
+              bin: i,
+              magnitude: this.freqData[i],
+              prominence,
+              note: freqToNote(freq)
+            });
+          }
+        }
+
+        // Sort by prominence descending, keep top 8
+        peaks.sort((a, b) => b.prominence - a.prominence);
+        return peaks.slice(0, 8);
+      }
+
+      drawSpectrum(peaks) {
+        const canvas = this.spectrumCanvas;
+        const ctx = this.spectrumCtx;
+        const w = canvas.width;
+        const h = canvas.height;
+        const dpr = devicePixelRatio;
+
+        ctx.fillStyle = '#0d0d14';
+        ctx.fillRect(0, 0, w, h);
+
+        const binCount = this.analyser.frequencyBinCount;
+        const sampleRate = this.audioCtx.sampleRate;
+        const binWidth = sampleRate / (binCount * 2);
+        const minFreq = parseInt(document.getElementById('minFreq').value);
+        const maxFreq = parseInt(document.getElementById('maxFreq').value);
+
+        const margin = { left: 50 * dpr, right: 20 * dpr, top: 10 * dpr, bottom: 30 * dpr };
+        const plotW = w - margin.left - margin.right;
+        const plotH = h - margin.top - margin.bottom;
+
+        // Use log scale for frequency axis
+        const logMin = Math.log10(minFreq);
+        const logMax = Math.log10(maxFreq);
+        const freqToX = (f) => margin.left + ((Math.log10(f) - logMin) / (logMax - logMin)) * plotW;
+
+        const dbMin = -100;
+        const dbMax = 0;
+        const dbToY = (db) => margin.top + (1 - (db - dbMin) / (dbMax - dbMin)) * plotH;
+
+        // Grid lines
+        ctx.strokeStyle = '#1a1a24';
+        ctx.lineWidth = 1;
+        for (const db of [-80, -60, -40, -20]) {
+          const y = dbToY(db);
+          ctx.beginPath();
+          ctx.moveTo(margin.left, y);
+          ctx.lineTo(w - margin.right, y);
+          ctx.stroke();
+
+          ctx.fillStyle = '#444';
+          ctx.font = `${10 * dpr}px system-ui`;
+          ctx.textAlign = 'right';
+          ctx.fillText(`${db}`, margin.left - 6 * dpr, y + 3 * dpr);
+        }
+
+        // Freq labels
+        const freqMarkers = [20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000]
+          .filter(f => f >= minFreq && f <= maxFreq);
+        ctx.textAlign = 'center';
+        for (const f of freqMarkers) {
+          const x = freqToX(f);
+          ctx.beginPath();
+          ctx.moveTo(x, margin.top);
+          ctx.lineTo(x, h - margin.bottom);
+          ctx.stroke();
+
+          ctx.fillStyle = '#444';
+          ctx.fillText(f >= 1000 ? `${f / 1000}k` : `${f}`, x, h - margin.bottom + 14 * dpr);
+        }
+
+        // Axis labels
+        ctx.fillStyle = '#555';
+        ctx.font = `${10 * dpr}px system-ui`;
+        ctx.textAlign = 'center';
+        ctx.fillText('Hz', w / 2, h - 2 * dpr);
+        ctx.save();
+        ctx.translate(12 * dpr, h / 2);
+        ctx.rotate(-Math.PI / 2);
+        ctx.fillText('dB', 0, 0);
+        ctx.restore();
+
+        // Draw spectrum line
+        ctx.beginPath();
+        let started = false;
+        for (let i = 0; i < binCount; i++) {
+          const freq = i * binWidth;
+          if (freq < minFreq || freq > maxFreq) continue;
+          const x = freqToX(freq);
+          const y = dbToY(Math.max(dbMin, this.freqData[i]));
+          if (!started) {
+            ctx.moveTo(x, y);
+            started = true;
+          } else {
+            ctx.lineTo(x, y);
+          }
+        }
+        ctx.strokeStyle = '#3b82f6';
+        ctx.lineWidth = 1.5 * dpr;
+        ctx.stroke();
+
+        // Fill under curve
+        if (started) {
+          ctx.lineTo(freqToX(maxFreq), dbToY(dbMin));
+          ctx.lineTo(freqToX(minFreq), dbToY(dbMin));
+          ctx.closePath();
+          const gradient = ctx.createLinearGradient(0, margin.top, 0, h - margin.bottom);
+          gradient.addColorStop(0, 'rgba(59,130,246,0.3)');
+          gradient.addColorStop(1, 'rgba(59,130,246,0.01)');
+          ctx.fillStyle = gradient;
+          ctx.fill();
+        }
+
+        // Mark peaks
+        for (const peak of peaks) {
+          const x = freqToX(peak.freq);
+          const y = dbToY(peak.magnitude);
+
+          // Vertical dashed line
+          ctx.setLineDash([4 * dpr, 4 * dpr]);
+          ctx.strokeStyle = 'rgba(239,68,68,0.5)';
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(x, y);
+          ctx.lineTo(x, h - margin.bottom);
+          ctx.stroke();
+          ctx.setLineDash([]);
+
+          // Dot
+          ctx.beginPath();
+          ctx.arc(x, y, 4 * dpr, 0, Math.PI * 2);
+          ctx.fillStyle = '#ef4444';
+          ctx.fill();
+
+          // Label
+          ctx.fillStyle = '#fca5a5';
+          ctx.font = `bold ${10 * dpr}px system-ui`;
+          ctx.textAlign = 'center';
+          ctx.fillText(`${Math.round(peak.freq)} Hz`, x, y - 8 * dpr);
+        }
+      }
+
+      drawSpectrogram() {
+        const canvas = this.spectrogramCanvas;
+        const ctx = this.spectrogramCtx;
+        const w = canvas.width;
+        const h = canvas.height;
+        const dpr = devicePixelRatio;
+
+        const binCount = this.analyser.frequencyBinCount;
+        const sampleRate = this.audioCtx.sampleRate;
+        const binWidth = sampleRate / (binCount * 2);
+        const minFreq = parseInt(document.getElementById('minFreq').value);
+        const maxFreq = parseInt(document.getElementById('maxFreq').value);
+
+        // Store current column
+        const col = new Float32Array(binCount);
+        for (let i = 0; i < binCount; i++) {
+          col[i] = this.freqData[i];
+        }
+        this.spectrogramData.push(col);
+        if (this.spectrogramData.length > this.spectrogramMaxCols) {
+          this.spectrogramData.shift();
+        }
+
+        ctx.fillStyle = '#0d0d14';
+        ctx.fillRect(0, 0, w, h);
+
+        const cols = this.spectrogramData.length;
+        const colWidth = w / this.spectrogramMaxCols;
+
+        // Map frequency bins to vertical position using log scale
+        const logMin = Math.log10(minFreq);
+        const logMax = Math.log10(maxFreq);
+
+        for (let c = 0; c < cols; c++) {
+          const data = this.spectrogramData[c];
+          const x = (c / this.spectrogramMaxCols) * w;
+
+          for (let y = 0; y < h; y++) {
+            // Map y to frequency (bottom = low freq, top = high freq)
+            const ratio = 1 - y / h;
+            const logFreq = logMin + ratio * (logMax - logMin);
+            const freq = Math.pow(10, logFreq);
+            const bin = Math.round(freq / binWidth);
+
+            if (bin < 0 || bin >= binCount) continue;
+
+            const db = data[bin];
+            // Map dB to color intensity
+            const normalized = Math.max(0, Math.min(1, (db + 100) / 80));
+            const r = Math.floor(normalized * 255 * normalized);
+            const g = Math.floor(normalized * 120 * normalized);
+            const b = Math.floor(80 + normalized * 175);
+            ctx.fillStyle = `rgb(${r},${g},${b})`;
+            ctx.fillRect(x, y, colWidth + 1, 1);
+          }
+        }
+
+        // Freq labels on right side
+        const freqMarkers = [50, 100, 200, 500, 1000, 2000, 5000]
+          .filter(f => f >= minFreq && f <= maxFreq);
+        ctx.fillStyle = 'rgba(255,255,255,0.4)';
+        ctx.font = `${9 * dpr}px system-ui`;
+        ctx.textAlign = 'right';
+        for (const f of freqMarkers) {
+          const ratio = (Math.log10(f) - logMin) / (logMax - logMin);
+          const y = (1 - ratio) * h;
+          ctx.fillText(f >= 1000 ? `${f / 1000}k` : `${f}`, w - 4 * dpr, y + 3 * dpr);
+        }
+      }
+
+      updateResonanceDisplay(peaks) {
+        if (peaks.length === 0) {
+          this.resonanceList.innerHTML = '<span class="no-resonances">No strong resonances detected. Try making a sound or adjusting the threshold.</span>';
+          return;
+        }
+
+        // Sort by frequency for display
+        const sorted = [...peaks].sort((a, b) => a.freq - b.freq);
+        const maxProm = Math.max(...sorted.map(p => p.prominence));
+
+        this.resonanceList.innerHTML = sorted.map(peak => {
+          const barWidth = (peak.prominence / maxProm) * 100;
+          return `
+            <div class="resonance-card">
+              <div class="freq">${peak.freq.toFixed(1)} Hz</div>
+              <div class="note">${peak.note}</div>
+              <div class="magnitude">${peak.magnitude.toFixed(1)} dB &middot; ${peak.prominence.toFixed(1)}x prominence</div>
+              <div class="bar-container"><div class="bar" style="width:${barWidth}%"></div></div>
+            </div>
+          `;
+        }).join('');
+      }
+    }
+
+    const analyzer = new ResonantAnalyzer();
+
+    // PWA install prompt
+    let deferredPrompt;
+    window.addEventListener('beforeinstallprompt', (e) => {
+      e.preventDefault();
+      deferredPrompt = e;
+      document.getElementById('installBanner').classList.add('visible');
+    });
+
+    document.getElementById('installBtn').addEventListener('click', async () => {
+      if (!deferredPrompt) return;
+      deferredPrompt.prompt();
+      await deferredPrompt.userChoice;
+      deferredPrompt = null;
+      document.getElementById('installBanner').classList.remove('visible');
+    });
+
+    document.getElementById('dismissInstall').addEventListener('click', () => {
+      document.getElementById('installBanner').classList.remove('visible');
+    });
+
+    window.addEventListener('appinstalled', () => {
+      document.getElementById('installBanner').classList.remove('visible');
+    });
+
+    // Register service worker for PWA
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('sw.js');
+    }
+  </script>
+</body>
+</html>

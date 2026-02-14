@@ -1,0 +1,19 @@
+{
+  "name": "Resonant Frequency Analyzer",
+  "short_name": "Resonant",
+  "description": "Detect resonant frequencies from your microphone in real-time",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#0a0a0f",
+  "theme_color": "#0a0a0f",
+  "orientation": "any",
+  "categories": ["utilities", "music"],
+  "icons": [
+    {
+      "src": "icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
