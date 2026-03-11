@@ -100,6 +100,23 @@
       height: 160px;
     }
 
+    #heatmapCanvas {
+      height: 160px;
+    }
+
+    #histogramCanvas {
+      height: 200px;
+    }
+
+    .decay-label {
+      font-size: 0.65rem;
+      color: #3b82f6;
+      font-weight: 400;
+      text-transform: none;
+      letter-spacing: normal;
+      margin-left: 6px;
+    }
+
     .resonances {
       width: 95%;
       max-width: 1200px;
@@ -165,6 +182,22 @@
       background: linear-gradient(90deg, #3b82f6, #a78bfa);
       border-radius: 2px;
       transition: width 0.15s ease;
+    }
+
+    .resonance-card .sparkline {
+      margin-top: 6px;
+    }
+
+    .resonance-card .sparkline canvas {
+      width: 100%;
+      height: 24px;
+      border-radius: 3px;
+    }
+
+    .resonance-card .score {
+      font-size: 0.7rem;
+      color: #666;
+      margin-top: 2px;
     }
 
     .no-resonances {
@@ -248,6 +281,8 @@
       .setting { font-size: 0.7rem; }
       canvas { height: 160px; }
       #spectrogramCanvas { height: 120px; }
+      #heatmapCanvas { height: 120px; }
+      #histogramCanvas { height: 160px; }
       .resonance-card { min-width: 130px; padding: 10px 12px; }
       .resonance-card .freq { font-size: 1.1rem; }
     }
@@ -289,6 +324,15 @@
       <label for="maxFreq">Max Hz:</label>
       <input type="number" id="maxFreq" value="8000" min="100" max="22050" style="width:60px">
     </div>
+    <div class="setting">
+      <label for="decayTime">Decay:</label>
+      <select id="decayTime">
+        <option value="5">5s</option>
+        <option value="15" selected>15s</option>
+        <option value="30">30s</option>
+        <option value="60">60s</option>
+      </select>
+    </div>
   </div>
 
   <div class="controls">
@@ -302,15 +346,25 @@
   </div>
 
   <div class="canvas-container">
-    <h2>Spectrogram</h2>
-    <canvas id="spectrogramCanvas"></canvas>
+    <h2>Peak History</h2>
+    <canvas id="heatmapCanvas"></canvas>
+  </div>
+
+  <div class="canvas-container">
+    <h2>Resonance Accumulation <span class="decay-label" id="decayLabel">15s decay</span></h2>
+    <canvas id="histogramCanvas"></canvas>
   </div>
 
   <div class="resonances">
-    <h2>Detected Resonant Frequencies</h2>
+    <h2>Top Resonances</h2>
     <div class="resonance-list" id="resonanceList">
       <span class="no-resonances">Start recording to detect resonances...</span>
     </div>
+  </div>
+
+  <div class="canvas-container">
+    <h2>Spectrogram</h2>
+    <canvas id="spectrogramCanvas"></canvas>
   </div>
 
   <script>
@@ -337,12 +391,24 @@
         this.spectrogramData = [];
         this.spectrogramMaxCols = 200;
 
+        // Accumulation data
+        this.accumulator = new Map(); // binIndex -> { score, freq, note }
+        this.peakHistory = [];        // [{ time, peaks }] ring buffer
+        this.lastAccumTime = 0;
+        this.lastCardUpdate = 0;
+        this.sparklineData = new Map(); // freq key -> array of recent scores
+
         this.spectrumCanvas = document.getElementById('spectrumCanvas');
         this.spectrogramCanvas = document.getElementById('spectrogramCanvas');
+        this.heatmapCanvas = document.getElementById('heatmapCanvas');
+        this.histogramCanvas = document.getElementById('histogramCanvas');
         this.spectrumCtx = this.spectrumCanvas.getContext('2d');
         this.spectrogramCtx = this.spectrogramCanvas.getContext('2d');
+        this.heatmapCtx = this.heatmapCanvas.getContext('2d');
+        this.histogramCtx = this.histogramCanvas.getContext('2d');
 
         this.resonanceList = document.getElementById('resonanceList');
+        this.decayLabel = document.getElementById('decayLabel');
         this.startBtn = document.getElementById('startBtn');
         this.statusEl = document.getElementById('status');
 
@@ -354,13 +420,17 @@
           this.thresholdVal.textContent = `${parseFloat(this.thresholdInput.value).toFixed(1)}x`;
         });
 
+        document.getElementById('decayTime').addEventListener('change', (e) => {
+          this.decayLabel.textContent = `${e.target.value}s decay`;
+        });
+
         this.resizeCanvases();
         window.addEventListener('resize', () => this.resizeCanvases());
         this.drawIdle();
       }
 
       resizeCanvases() {
-        for (const canvas of [this.spectrumCanvas, this.spectrogramCanvas]) {
+        for (const canvas of [this.spectrumCanvas, this.spectrogramCanvas, this.heatmapCanvas, this.histogramCanvas]) {
           const rect = canvas.getBoundingClientRect();
           canvas.width = rect.width * devicePixelRatio;
           canvas.height = rect.height * devicePixelRatio;
@@ -370,7 +440,9 @@
       drawIdle() {
         for (const [canvas, ctx] of [
           [this.spectrumCanvas, this.spectrumCtx],
-          [this.spectrogramCanvas, this.spectrogramCtx]
+          [this.spectrogramCanvas, this.spectrogramCtx],
+          [this.heatmapCanvas, this.heatmapCtx],
+          [this.histogramCanvas, this.histogramCtx]
         ]) {
           ctx.fillStyle = '#0d0d14';
           ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -411,6 +483,11 @@
         this.freqData = new Float32Array(this.analyser.frequencyBinCount);
         this.running = true;
         this.spectrogramData = [];
+        this.accumulator.clear();
+        this.peakHistory = [];
+        this.sparklineData.clear();
+        this.lastAccumTime = performance.now();
+        this.lastCardUpdate = 0;
 
         this.startBtn.textContent = 'Stop Recording';
         this.startBtn.classList.add('recording');
@@ -437,10 +514,15 @@
         this.analyser.smoothingTimeConstant = parseFloat(document.getElementById('smoothing').value);
         this.analyser.getFloatFrequencyData(this.freqData);
 
+        const now = performance.now();
         const peaks = this.findResonances();
+
         this.drawSpectrum(peaks);
         this.drawSpectrogram();
-        this.updateResonanceDisplay(peaks);
+        this.updateAccumulator(peaks, now);
+        this.drawResonanceHeatmap(now);
+        this.drawAccumulationHistogram();
+        this.updateTopResonances(now);
 
         this.animFrame = requestAnimationFrame(() => this.loop());
       }
@@ -717,27 +799,348 @@
         }
       }
 
-      updateResonanceDisplay(peaks) {
-        if (peaks.length === 0) {
-          this.resonanceList.innerHTML = '<span class="no-resonances">No strong resonances detected. Try making a sound or adjusting the threshold.</span>';
+      getDecaySeconds() {
+        return parseInt(document.getElementById('decayTime').value);
+      }
+
+      updateAccumulator(peaks, now) {
+        const dt = (now - this.lastAccumTime) / 1000; // seconds since last frame
+        this.lastAccumTime = now;
+        const decaySec = this.getDecaySeconds();
+        // Half-life decay: after decaySec seconds, score drops to ~5% (using tau = decaySec / 3)
+        const tau = decaySec / 3;
+        const decayFactor = Math.exp(-dt / tau);
+
+        // Decay all existing entries
+        for (const [bin, entry] of this.accumulator) {
+          entry.score *= decayFactor;
+          if (entry.score < 0.001) {
+            this.accumulator.delete(bin);
+          }
+        }
+
+        // Boost scores for current peaks
+        const sampleRate = this.audioCtx.sampleRate;
+        const binCount = this.analyser.frequencyBinCount;
+        const binWidth = sampleRate / (binCount * 2);
+
+        for (const peak of peaks) {
+          const bin = peak.bin;
+          const boost = peak.prominence * 0.1; // scale the boost
+          const existing = this.accumulator.get(bin);
+          if (existing) {
+            existing.score += boost;
+            existing.freq = peak.freq;
+            existing.note = peak.note;
+          } else {
+            this.accumulator.set(bin, {
+              score: boost,
+              freq: peak.freq,
+              note: peak.note
+            });
+          }
+        }
+
+        // Store peak history for heatmap
+        this.peakHistory.push({ time: now, peaks: [...peaks] });
+        // Trim to decay window
+        const cutoff = now - decaySec * 1000;
+        while (this.peakHistory.length > 0 && this.peakHistory[0].time < cutoff) {
+          this.peakHistory.shift();
+        }
+      }
+
+      drawResonanceHeatmap(now) {
+        const canvas = this.heatmapCanvas;
+        const ctx = this.heatmapCtx;
+        const w = canvas.width;
+        const h = canvas.height;
+        const dpr = devicePixelRatio;
+
+        ctx.fillStyle = '#0d0d14';
+        ctx.fillRect(0, 0, w, h);
+
+        if (this.peakHistory.length === 0) return;
+
+        const decaySec = this.getDecaySeconds();
+        const windowMs = decaySec * 1000;
+        const minFreq = parseInt(document.getElementById('minFreq').value);
+        const maxFreq = parseInt(document.getElementById('maxFreq').value);
+        const logMin = Math.log10(minFreq);
+        const logMax = Math.log10(maxFreq);
+
+        const margin = { left: 50 * dpr, right: 20 * dpr, top: 6 * dpr, bottom: 24 * dpr };
+        const plotW = w - margin.left - margin.right;
+        const plotH = h - margin.top - margin.bottom;
+        const freqToX = (f) => margin.left + ((Math.log10(f) - logMin) / (logMax - logMin)) * plotW;
+
+        // Time axis labels
+        ctx.fillStyle = '#444';
+        ctx.font = `${9 * dpr}px system-ui`;
+        ctx.textAlign = 'center';
+        for (let s = 0; s <= decaySec; s += Math.max(1, Math.floor(decaySec / 5))) {
+          const y = margin.top + (1 - s / decaySec) * plotH;
+          ctx.fillText(`-${s}s`, margin.left - 24 * dpr, y + 3 * dpr);
+          ctx.strokeStyle = '#1a1a24';
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(margin.left, y);
+          ctx.lineTo(w - margin.right, y);
+          ctx.stroke();
+        }
+
+        // Freq labels
+        const freqMarkers = [50, 100, 200, 500, 1000, 2000, 5000, 10000]
+          .filter(f => f >= minFreq && f <= maxFreq);
+        for (const f of freqMarkers) {
+          const x = freqToX(f);
+          ctx.strokeStyle = '#1a1a24';
+          ctx.beginPath();
+          ctx.moveTo(x, margin.top);
+          ctx.lineTo(x, h - margin.bottom);
+          ctx.stroke();
+          ctx.fillStyle = '#444';
+          ctx.fillText(f >= 1000 ? `${f / 1000}k` : `${f}`, x, h - margin.bottom + 12 * dpr);
+        }
+
+        // Draw peak events as glowing dots
+        for (const entry of this.peakHistory) {
+          const age = (now - entry.time) / windowMs; // 0=newest, 1=oldest
+          if (age > 1) continue;
+          const y = margin.top + age * plotH; // newest at top, oldest at bottom
+          const alpha = Math.max(0.05, 1 - age);
+
+          for (const peak of entry.peaks) {
+            if (peak.freq < minFreq || peak.freq > maxFreq) continue;
+            const x = freqToX(peak.freq);
+            const radius = Math.max(2, Math.min(6, peak.prominence * 0.8)) * dpr;
+
+            // Glow
+            const gradient = ctx.createRadialGradient(x, y, 0, x, y, radius * 3);
+            gradient.addColorStop(0, `rgba(96,165,250,${alpha * 0.6})`);
+            gradient.addColorStop(0.5, `rgba(96,165,250,${alpha * 0.2})`);
+            gradient.addColorStop(1, `rgba(96,165,250,0)`);
+            ctx.fillStyle = gradient;
+            ctx.fillRect(x - radius * 3, y - radius * 3, radius * 6, radius * 6);
+
+            // Core dot
+            ctx.beginPath();
+            ctx.arc(x, y, radius, 0, Math.PI * 2);
+            ctx.fillStyle = `rgba(147,197,253,${alpha})`;
+            ctx.fill();
+          }
+        }
+      }
+
+      drawAccumulationHistogram() {
+        const canvas = this.histogramCanvas;
+        const ctx = this.histogramCtx;
+        const w = canvas.width;
+        const h = canvas.height;
+        const dpr = devicePixelRatio;
+
+        ctx.fillStyle = '#0d0d14';
+        ctx.fillRect(0, 0, w, h);
+
+        if (this.accumulator.size === 0) return;
+
+        const minFreq = parseInt(document.getElementById('minFreq').value);
+        const maxFreq = parseInt(document.getElementById('maxFreq').value);
+        const logMin = Math.log10(minFreq);
+        const logMax = Math.log10(maxFreq);
+        const sampleRate = this.audioCtx.sampleRate;
+        const binCount = this.analyser.frequencyBinCount;
+        const binWidth = sampleRate / (binCount * 2);
+
+        const margin = { left: 50 * dpr, right: 20 * dpr, top: 20 * dpr, bottom: 30 * dpr };
+        const plotW = w - margin.left - margin.right;
+        const plotH = h - margin.top - margin.bottom;
+        const freqToX = (f) => margin.left + ((Math.log10(f) - logMin) / (logMax - logMin)) * plotW;
+
+        // Grid
+        ctx.strokeStyle = '#1a1a24';
+        ctx.lineWidth = 1;
+        const freqMarkers = [50, 100, 200, 500, 1000, 2000, 5000, 10000]
+          .filter(f => f >= minFreq && f <= maxFreq);
+        ctx.fillStyle = '#444';
+        ctx.font = `${9 * dpr}px system-ui`;
+        ctx.textAlign = 'center';
+        for (const f of freqMarkers) {
+          const x = freqToX(f);
+          ctx.beginPath();
+          ctx.moveTo(x, margin.top);
+          ctx.lineTo(x, h - margin.bottom);
+          ctx.stroke();
+          ctx.fillText(f >= 1000 ? `${f / 1000}k` : `${f}`, x, h - margin.bottom + 14 * dpr);
+        }
+
+        // Find max score for scaling
+        let maxScore = 0;
+        for (const entry of this.accumulator.values()) {
+          if (entry.score > maxScore) maxScore = entry.score;
+        }
+        if (maxScore === 0) return;
+
+        // Collect and sort entries by score for labeling
+        const entries = [...this.accumulator.entries()]
+          .map(([bin, e]) => ({ bin, ...e }))
+          .filter(e => e.freq >= minFreq && e.freq <= maxFreq)
+          .sort((a, b) => b.score - a.score);
+
+        // Bar width in pixels (based on frequency resolution)
+        const minBarW = 3 * dpr;
+
+        // Draw bars
+        for (const entry of entries) {
+          const x = freqToX(entry.freq);
+          const barH = (entry.score / maxScore) * plotH;
+          const barW = Math.max(minBarW, plotW / 120);
+          const y = margin.top + plotH - barH;
+
+          // Gradient bar
+          const gradient = ctx.createLinearGradient(x, y, x, margin.top + plotH);
+          const intensity = entry.score / maxScore;
+          gradient.addColorStop(0, `rgba(96,165,250,${0.5 + intensity * 0.5})`);
+          gradient.addColorStop(0.6, `rgba(59,130,246,${0.3 + intensity * 0.4})`);
+          gradient.addColorStop(1, `rgba(59,130,246,0.05)`);
+          ctx.fillStyle = gradient;
+          ctx.beginPath();
+          ctx.roundRect(x - barW / 2, y, barW, barH, [barW / 3, barW / 3, 0, 0]);
+          ctx.fill();
+
+          // Glow effect for tall bars
+          if (intensity > 0.3) {
+            ctx.shadowColor = 'rgba(96,165,250,0.4)';
+            ctx.shadowBlur = 8 * dpr * intensity;
+            ctx.fillStyle = `rgba(147,197,253,${intensity * 0.3})`;
+            ctx.fillRect(x - barW / 2, y, barW, Math.min(barH, 4 * dpr));
+            ctx.shadowBlur = 0;
+          }
+        }
+
+        // Label top entries (up to 6)
+        const topEntries = entries.slice(0, 6);
+        ctx.textAlign = 'center';
+        for (let i = 0; i < topEntries.length; i++) {
+          const entry = topEntries[i];
+          const x = freqToX(entry.freq);
+          const barH = (entry.score / maxScore) * plotH;
+          const y = margin.top + plotH - barH;
+
+          // Dot at peak
+          ctx.beginPath();
+          ctx.arc(x, y - 2 * dpr, 3 * dpr, 0, Math.PI * 2);
+          ctx.fillStyle = '#f0f0f0';
+          ctx.fill();
+
+          // Frequency label
+          ctx.fillStyle = '#e0e0e0';
+          ctx.font = `bold ${9 * dpr}px system-ui`;
+          ctx.fillText(`${Math.round(entry.freq)}`, x, y - 12 * dpr);
+
+          // Note name
+          const noteName = entry.note.split(' ')[0]; // just "A4" not "(+3c)"
+          ctx.fillStyle = '#a78bfa';
+          ctx.font = `${8 * dpr}px system-ui`;
+          ctx.fillText(noteName, x, y - 3 * dpr - 14 * dpr);
+        }
+
+        // Y-axis label
+        ctx.fillStyle = '#555';
+        ctx.font = `${9 * dpr}px system-ui`;
+        ctx.textAlign = 'right';
+        ctx.fillText('score', margin.left - 6 * dpr, margin.top + 4 * dpr);
+      }
+
+      updateTopResonances(now) {
+        // Throttle card updates to every 500ms
+        if (now - this.lastCardUpdate < 500) return;
+        this.lastCardUpdate = now;
+
+        // Get top accumulated resonances
+        const entries = [...this.accumulator.entries()]
+          .map(([bin, e]) => ({ bin, ...e }))
+          .sort((a, b) => b.score - a.score)
+          .slice(0, 6);
+
+        if (entries.length === 0 || entries[0].score < 0.01) {
+          this.resonanceList.innerHTML = '<span class="no-resonances">No resonances accumulated yet. Make a sustained sound...</span>';
           return;
         }
 
-        // Sort by frequency for display
-        const sorted = [...peaks].sort((a, b) => a.freq - b.freq);
-        const maxProm = Math.max(...sorted.map(p => p.prominence));
+        const maxScore = entries[0].score;
 
-        this.resonanceList.innerHTML = sorted.map(peak => {
-          const barWidth = (peak.prominence / maxProm) * 100;
+        // Update sparkline data
+        for (const entry of entries) {
+          const key = entry.bin;
+          if (!this.sparklineData.has(key)) {
+            this.sparklineData.set(key, []);
+          }
+          const arr = this.sparklineData.get(key);
+          arr.push(entry.score);
+          if (arr.length > 30) arr.shift(); // keep last 30 samples (~15 seconds at 500ms)
+        }
+
+        this.resonanceList.innerHTML = entries.map(entry => {
+          const barWidth = (entry.score / maxScore) * 100;
+          const sparkData = this.sparklineData.get(entry.bin) || [];
+          const sparkId = `spark-${entry.bin}`;
           return `
             <div class="resonance-card">
-              <div class="freq">${peak.freq.toFixed(1)} Hz</div>
-              <div class="note">${peak.note}</div>
-              <div class="magnitude">${peak.magnitude.toFixed(1)} dB &middot; ${peak.prominence.toFixed(1)}x prominence</div>
+              <div class="freq">${entry.freq.toFixed(1)} Hz</div>
+              <div class="note">${entry.note}</div>
+              <div class="score">Score: ${entry.score.toFixed(2)}</div>
               <div class="bar-container"><div class="bar" style="width:${barWidth}%"></div></div>
+              <div class="sparkline"><canvas id="${sparkId}" data-spark="${entry.bin}"></canvas></div>
             </div>
           `;
         }).join('');
+
+        // Draw sparklines after DOM update
+        requestAnimationFrame(() => {
+          for (const entry of entries) {
+            const canvas = document.getElementById(`spark-${entry.bin}`);
+            if (!canvas) continue;
+            const rect = canvas.getBoundingClientRect();
+            canvas.width = rect.width * devicePixelRatio;
+            canvas.height = rect.height * devicePixelRatio;
+            const ctx = canvas.getContext('2d');
+            const sparkData = this.sparklineData.get(entry.bin) || [];
+            this.drawSparkline(ctx, canvas.width, canvas.height, sparkData);
+          }
+        });
+      }
+
+      drawSparkline(ctx, w, h, data) {
+        if (data.length < 2) return;
+        const max = Math.max(...data, 0.01);
+        const padding = 2 * devicePixelRatio;
+
+        // Background
+        ctx.fillStyle = '#0d0d14';
+        ctx.fillRect(0, 0, w, h);
+
+        // Line
+        ctx.beginPath();
+        for (let i = 0; i < data.length; i++) {
+          const x = padding + (i / (data.length - 1)) * (w - padding * 2);
+          const y = h - padding - (data[i] / max) * (h - padding * 2);
+          if (i === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        }
+        ctx.strokeStyle = '#3b82f6';
+        ctx.lineWidth = 1.5 * devicePixelRatio;
+        ctx.stroke();
+
+        // Fill under
+        ctx.lineTo(w - padding, h - padding);
+        ctx.lineTo(padding, h - padding);
+        ctx.closePath();
+        const gradient = ctx.createLinearGradient(0, 0, 0, h);
+        gradient.addColorStop(0, 'rgba(59,130,246,0.25)');
+        gradient.addColorStop(1, 'rgba(59,130,246,0.02)');
+        ctx.fillStyle = gradient;
+        ctx.fill();
       }
     }
 
