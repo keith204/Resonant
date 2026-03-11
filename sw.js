@@ -1,4 +1,4 @@
-const CACHE_NAME = 'resonant-v2';
+const CACHE_NAME = 'resonant-v3';
 const ASSETS = [
   './',
   './index.html',
